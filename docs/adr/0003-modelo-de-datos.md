@@ -90,6 +90,17 @@ Un booleano es semánticamente más claro para el filtro `WHERE is_archived = fa
 
 ---
 
+## Reglas de negocio sobre check-ins: dónde se enforcean
+
+Dos criterios de aceptación de la spec no se pueden expresar como constraints de DB sin lógica de fecha dinámica, y se delegan íntegramente a la capa de Server Action:
+
+- **CA #5 / CA #7 — Ventana de check-in:** Solo se puede registrar un check-in para el día actual o hasta 1 día atrás. Con 2 o más días de antigüedad la acción no está disponible. El Server Action `createCheckIn` compara `checked_date` con `now()::date` antes de insertar y retorna error si la diferencia supera 1 día.
+- **CA #6 — Ventana de desmarque:** Solo se puede eliminar un check-in el mismo día en que fue creado. El Server Action `deleteCheckIn` compara `check_ins.created_at::date` con `now()::date` y rechaza la operación si no coinciden.
+
+El esquema no tiene constraints para estas reglas. La decisión es deliberada: la app es de un solo usuario sin acceso externo a la base de datos, por lo que la validación en el servidor es suficiente. Si en el futuro hubiera acceso directo a la DB, habría que agregar constraints o policies de RLS.
+
+---
+
 ## Consecuencias
 
 **Positivas:**
@@ -100,3 +111,4 @@ Un booleano es semánticamente más claro para el filtro `WHERE is_archived = fa
 **Negativas / trade-offs aceptados:**
 - Categoría única significa que un usuario no puede clasificar un hábito en dos categorías a la vez. Si el uso real revela que esta limitación frustra al usuario, migrar a junction table requiere una migración de esquema y reescribir todos los queries del dashboard.
 - La racha computada en tiempo real implica una query sobre `check_ins` por cada hábito mostrado en el dashboard. Si un usuario tiene 20 hábitos activos y varios años de historial, esto puede volverse lento. Por ahora se acepta; si ocurre, se puede mitigar con un índice parcial sobre `checked_date` o con un cron que calcule rachas de forma diferida.
+- Las reglas de ventana de check-in y desmarque viven solo en el servidor. Un insert directo en Supabase (dashboard de Supabase, script ad hoc) las saltea sin error.

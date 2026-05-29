@@ -19,6 +19,8 @@ Las mutaciones se implementan como **Server Actions** en archivos `actions.ts` d
 
 ```
 src/features/
+  auth/
+    actions.ts      # register, login, logout
   habits/
     actions.ts      # createHabit, updateHabit, archiveHabit
   checkins/
@@ -26,6 +28,8 @@ src/features/
   categories/
     actions.ts      # createCategory
 ```
+
+Las acciones de `auth` siguen el mismo patrón que el resto pero con una diferencia: llaman a `supabase.auth.signUp()`, `supabase.auth.signInWithPassword()` y `supabase.auth.signOut()` en lugar de queries directas a tablas. Los errores de Supabase Auth (`invalid_credentials`, `email_already_registered`) se mapean a mensajes de usuario antes de retornar `{ error }`.
 
 Cada Server Action: (1) verifica la sesión con `getUser()`, (2) valida los parámetros, (3) ejecuta la mutación en Supabase, (4) llama `revalidatePath()` para invalidar el caché, (5) retorna `{ data, error }`. Los Client Components que las llaman usan `useTransition` para gestionar el estado de carga.
 
