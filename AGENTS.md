@@ -8,7 +8,7 @@ Las decisiones documentadas aquí están cerradas. Las que no aparecen están ab
 ## Stack
 
 - Framework: Next.js 15, App Router exclusivamente (sin Pages Router)
-- Base de datos y autenticación: Supabase (Postgres + Supabase Auth + Storage)
+- Base de datos y autenticación: Supabase (Postgres + Supabase Auth)
 - Deploy: Vercel
 - Lenguaje: TypeScript 5 con `strict: true`
 - Estilos: Tailwind CSS
@@ -32,7 +32,9 @@ src/
   app/           # Rutas y layouts (App Router)
   components/    # Componentes reutilizables sin lógica de negocio
   features/      # Módulos por dominio: auth, habits, checkins, categories
-  lib/           # Clientes externos: supabase.ts y utilidades genéricas
+  lib/
+    supabase/    # createServerClient (server.ts), createBrowserClient (client.ts), middleware (middleware.ts)
+                 # utilidades genéricas en lib/ directamente
   types/         # Interfaces y tipos compartidos
   hooks/         # React hooks reutilizables
 insumos/         # Documentos de referencia: brief, specs de entrada
