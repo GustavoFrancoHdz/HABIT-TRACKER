@@ -2,7 +2,7 @@
 
 **Generado desde:** `spec.md`, ADRs 0001–0005, `docs/diseño.md`, `docs/pruebas-manuales.md`, `AGENTS.md`  
 **Ejecutor:** agente `implementer`  
-**Alcance:** núcleo funcional (auth + hábitos + check-ins + rachas). Sin extensiones.
+**Alcance:** núcleo funcional (auth + hábitos + check-ins + rachas + categorías + progreso semanal). Sin extensiones.
 
 ---
 
@@ -11,6 +11,8 @@
 - **Depende de:** las tareas que deben estar completas antes de iniciar esta.
 - **Criterio de hecho:** una línea observable que confirma que la tarea terminó. No es subjetivo; es un estado verificable.
 - Si una tarea no lista un ADR o prueba manual, no hay uno aplicable en ese punto.
+- **Convención de días de semana:** `day_of_week` en base de datos usa el mismo mapeo que `Date.getDay()` de JavaScript: 0 = domingo, 1 = lunes, 2 = martes, 3 = miércoles, 4 = jueves, 5 = viernes, 6 = sábado. Toda comparación entre DB y JS debe respetar este mapeo.
+- **Aritmética de fechas:** nunca usar `new Date('YYYY-MM-DD')` para comparar con hora local — lo parsea como UTC midnight y da diffs incorrectos fuera de UTC+0. Usar `new Date().toLocaleDateString('sv')` que devuelve `'YYYY-MM-DD'` en hora local, y operar sobre strings o sobre objetos `Date` construidos con `new Date(dateStr + 'T00:00:00')` (sin Z).
 
 ---
 
@@ -19,6 +21,10 @@
 **Depende de:** ninguna
 
 **Objetivo:** crear el repositorio de la aplicación con Next.js 15, App Router, TypeScript strict, Tailwind e instalar shadcn/ui inicializado.
+
+### Precondición obligatoria antes de continuar
+
+Antes de ejecutar cualquier prueba de autenticación (Prueba 1), desactivar la confirmación de email en Supabase: **Dashboard → Authentication → Settings → Enable email confirmations → OFF**. Sin esto, `signUp` deja al usuario en estado pendiente de confirmación y nunca redirige al dashboard.
 
 ### Pasos
 
@@ -57,7 +63,7 @@
 
 ### Criterio de hecho
 
-`npm run dev` arranca sin errores, `http://localhost:3000` devuelve 200 y muestra el texto "Habit Tracker", y `npm run build` completa sin errores de TypeScript.
+`npm run dev` arranca sin errores y `http://localhost:3000` devuelve 200 mostrando el texto "Habit Tracker".
 
 ---
 
@@ -66,7 +72,7 @@
 **Depende de:** Tarea 01  
 **ADR de referencia:** [ADR-0002](docs/adr/0002-supabase-como-backend.md)
 
-**Objetivo:** instalar `@supabase/ssr` y crear los dos clientes (server y browser) en `src/lib/supabase/`, listos para ser importados desde cualquier parte del proyecto.
+**Objetivo:** instalar `@supabase/ssr` y crear los dos clientes (server y browser) en `src/lib/supabase/`, listos para ser importados. Los clientes usan `any` como genérico hasta que la Tarea 04 genere los tipos reales.
 
 ### Pasos
 
@@ -74,7 +80,7 @@
    ```bash
    npm install @supabase/ssr @supabase/supabase-js
    ```
-2. Crear `.env.local` en la raíz con las dos variables requeridas (obtener los valores del dashboard de Supabase, sección Project Settings → API):
+2. Crear `.env.local` en la raíz (obtener valores en Supabase Dashboard → Settings → API):
    ```
    NEXT_PUBLIC_SUPABASE_URL=<url-del-proyecto>
    NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
@@ -83,11 +89,11 @@
    ```ts
    import { createServerClient } from '@supabase/ssr'
    import { cookies } from 'next/headers'
-   import type { Database } from '@/types/database.types'
 
+   // eslint-disable-next-line @typescript-eslint/no-explicit-any
    export async function createClient() {
      const cookieStore = await cookies()
-     return createServerClient<Database>(
+     return createServerClient<any>(
        process.env.NEXT_PUBLIC_SUPABASE_URL!,
        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
        {
@@ -108,23 +114,19 @@
 4. Crear `src/lib/supabase/client.ts`:
    ```ts
    import { createBrowserClient } from '@supabase/ssr'
-   import type { Database } from '@/types/database.types'
 
+   // eslint-disable-next-line @typescript-eslint/no-explicit-any
    export function createClient() {
-     return createBrowserClient<Database>(
+     return createBrowserClient<any>(
        process.env.NEXT_PUBLIC_SUPABASE_URL!,
        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
      )
    }
    ```
-5. Crear un placeholder `src/types/database.types.ts` con contenido mínimo para que TypeScript no falle antes de la Tarea 04:
-   ```ts
-   export type Database = Record<string, unknown>
-   ```
 
 ### Criterio de hecho
 
-`npm run build` completa sin errores. Los archivos `src/lib/supabase/server.ts` y `src/lib/supabase/client.ts` existen y no tienen errores de TypeScript al correr `npx tsc --noEmit`.
+`npm run dev` arranca sin errores. Los dos archivos existen en `src/lib/supabase/` y el servidor no lanza errores de importación al arrancar.
 
 ---
 
@@ -133,11 +135,11 @@
 **Depende de:** Tarea 02  
 **ADR de referencia:** [ADR-0003](docs/adr/0003-modelo-de-datos.md)
 
-**Objetivo:** crear las 4 tablas del modelo de datos, habilitar RLS en cada una, crear las políticas de acceso por `user_id`, e insertar las categorías predefinidas.
+**Objetivo:** crear las 4 tablas del modelo de datos, habilitar RLS, crear las políticas de acceso y poblar las categorías predefinidas.
 
 ### Pasos
 
-1. En el dashboard de Supabase del proyecto, ir a **SQL Editor** y ejecutar el siguiente script en orden:
+1. **Ejecutar en el SQL Editor del dashboard de Supabase** (corre como `service_role`, bypasea RLS — no ejecutar con el cliente de la app ni con `supabase db push` sin `--role service_role`, ya que el seed inserta con `user_id = null` y la política de INSERT lo rechazaría como usuario autenticado):
 
 ```sql
 -- Tabla de categorías
@@ -162,6 +164,7 @@ create table habits (
 );
 
 -- Días configurados para hábitos semanales
+-- day_of_week sigue el mapeo de JS: 0=domingo, 1=lunes, ..., 6=sábado
 create table habit_days (
   habit_id     uuid not null references habits(id) on delete cascade,
   day_of_week  smallint not null check (day_of_week between 0 and 6),
@@ -251,21 +254,22 @@ create policy "check_ins: eliminar propios"
   on check_ins for delete
   using (user_id = auth.uid());
 
--- Seed: categorías predefinidas (user_id NULL = globales)
+-- Seed: categorías predefinidas
+-- Se ejecuta con service_role (SQL Editor), por eso user_id puede ser null
 insert into categories (user_id, name, is_predefined) values
-  (null, 'Salud',      true),
-  (null, 'Deporte',    true),
-  (null, 'Bienestar',  true),
-  (null, 'Aprendizaje',true),
+  (null, 'Salud',         true),
+  (null, 'Deporte',       true),
+  (null, 'Bienestar',     true),
+  (null, 'Aprendizaje',   true),
   (null, 'Productividad', true),
-  (null, 'Nutrición',  true);
+  (null, 'Nutrición',     true);
 ```
 
 2. Guardar el SQL como `supabase/migrations/20260529000000_initial_schema.sql` en el repositorio para trazabilidad.
 
 ### Criterio de hecho
 
-En el dashboard de Supabase, la sección **Table Editor** muestra las tablas `categories`, `habits`, `habit_days` y `check_ins`. La tabla `categories` contiene 6 filas de categorías predefinidas. En la sección **Authentication → Policies**, las 4 tablas listan sus políticas.
+En Supabase Dashboard → Table Editor: las tablas `categories`, `habits`, `habit_days` y `check_ins` existen con sus columnas. La tabla `categories` tiene 6 filas con `is_predefined = true`. En Authentication → Policies: las 4 tablas listan sus políticas.
 
 ---
 
@@ -274,25 +278,24 @@ En el dashboard de Supabase, la sección **Table Editor** muestra las tablas `ca
 **Depende de:** Tarea 02, Tarea 03  
 **ADR de referencia:** [ADR-0002](docs/adr/0002-supabase-como-backend.md), [ADR-0003](docs/adr/0003-modelo-de-datos.md)
 
-**Objetivo:** reemplazar el placeholder `database.types.ts` con los tipos reales generados desde el esquema de Supabase, eliminando la necesidad de definir tipos de dominio manualmente.
+**Objetivo:** generar `src/types/database.types.ts` desde el esquema real de Supabase y reemplazar el `any` de los clientes por el tipo `Database` correcto.
 
 ### Pasos
 
-1. Instalar Supabase CLI si no está disponible:
+1. Instalar Supabase CLI:
    ```bash
    npm install supabase --save-dev
    ```
-2. Iniciar sesión y vincular el proyecto:
+2. Iniciar sesión y vincular el proyecto (el `project-ref` está en Settings → General):
    ```bash
    npx supabase login
    npx supabase link --project-ref <project-ref>
    ```
-   El `project-ref` se encuentra en Settings → General del dashboard de Supabase.
 3. Generar los tipos:
    ```bash
    npx supabase gen types typescript --linked > src/types/database.types.ts
    ```
-4. Crear los tipos de dominio de la aplicación en `src/types/index.ts`:
+4. Crear `src/types/index.ts` con aliases de dominio:
    ```ts
    import type { Database } from './database.types'
 
@@ -303,20 +306,21 @@ En el dashboard de Supabase, la sección **Table Editor** muestra las tablas `ca
 
    export type HabitFrequency = 'daily' | 'weekly'
    ```
+5. Actualizar `src/lib/supabase/server.ts` y `src/lib/supabase/client.ts`: reemplazar `<any>` por `<Database>` e importar `Database` desde `@/types/database.types`. Eliminar los comentarios `eslint-disable` del paso anterior.
 
 ### Criterio de hecho
 
-`npx tsc --noEmit` completa sin errores. El archivo `src/types/database.types.ts` contiene los tipos `categories`, `habits`, `habit_days` y `check_ins` con sus columnas reales.
+`npx tsc --noEmit` completa sin errores. `src/types/database.types.ts` contiene los tipos de las cuatro tablas con sus columnas reales.
 
 ---
 
-## Tarea 05 — Implementar middleware.ts de autenticación
+## Tarea 05 — Middleware de autenticación + páginas /login y /register
 
 **Depende de:** Tarea 02  
-**ADR de referencia:** [ADR-0004](docs/adr/0004-autenticacion-middleware.md)  
+**ADR de referencia:** [ADR-0004](docs/adr/0004-autenticacion-middleware.md), [ADR-0001](docs/adr/0001-nextjs-app-router.md)  
 **Prueba manual:** [Prueba 2](docs/pruebas-manuales.md) (redirección a login sin sesión)
 
-**Objetivo:** crear `src/middleware.ts` que proteja todas las rutas excepto `/login` y `/register`, refresque la cookie de sesión en cada request y redirija al dashboard si hay sesión activa en rutas públicas.
+**Objetivo:** crear `src/middleware.ts` que proteja todas las rutas excepto `/login` y `/register`, e implementar los formularios de autenticación con UI completa en un route group `(auth)`. La UI es funcional visualmente; las acciones se conectan en la Tarea 07.
 
 ### Pasos
 
@@ -365,27 +369,7 @@ En el dashboard de Supabase, la sección **Table Editor** muestra las tablas `ca
      matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)'],
    }
    ```
-2. Crear páginas placeholder para que las rutas existan:
-   - `src/app/login/page.tsx` → componente que renderice `<div>Login</div>`
-   - `src/app/register/page.tsx` → componente que renderice `<div>Register</div>`
-   - `src/app/dashboard/page.tsx` → componente que renderice `<div>Dashboard</div>`
-
-### Criterio de hecho
-
-Abrir una ventana de incógnito y navegar a `http://localhost:3000/dashboard` redirige automáticamente a `http://localhost:3000/login`. Navegar a `/login` con una sesión activa redirige a `/dashboard`.
-
----
-
-## Tarea 06 — Crear páginas /login y /register con formularios de UI
-
-**Depende de:** Tarea 01, Tarea 05  
-**ADR de referencia:** [ADR-0001](docs/adr/0001-nextjs-app-router.md)
-
-**Objetivo:** implementar los formularios de autenticación con los componentes del sistema visual definidos en `docs/diseño.md`. La UI es funcional visualmente; las acciones se conectan en la Tarea 08.
-
-### Pasos
-
-1. Crear `src/app/(auth)/layout.tsx` — layout compartido para login y register:
+2. Crear `src/app/(auth)/layout.tsx`:
    ```tsx
    export default function AuthLayout({ children }: { children: React.ReactNode }) {
      return (
@@ -397,23 +381,22 @@ Abrir una ventana de incógnito y navegar a `http://localhost:3000/dashboard` re
      )
    }
    ```
-2. Mover `src/app/login/page.tsx` a `src/app/(auth)/login/page.tsx` y reemplazar su contenido con el formulario real usando `Form`, `FormField`, `Input`, `Label`, `Button` de shadcn/ui. El formulario tiene campos `email` y `password`, un botón "Iniciar sesión" y un enlace a `/register`.
-3. Crear `src/app/(auth)/register/page.tsx` con el mismo patrón: campos `email` y `password`, botón "Crear cuenta", enlace a `/login`.
-4. Ambas páginas son `"use client"` y usan `react-hook-form` para gestionar el estado del formulario. Los campos tienen validación básica (email válido, contraseña mínimo 6 caracteres) con mensajes de error visibles vía `FormMessage`.
-5. Actualizar el matcher del middleware si los paths cambiaron por el route group `(auth)`.
+3. Crear `src/app/(auth)/login/page.tsx` como `"use client"` con `react-hook-form`: campos `email` y `password`, botón "Iniciar sesión" (primary), enlace a `/register`. Validación básica: email válido, contraseña mínimo 6 caracteres, errores vía `FormMessage`.
+4. Crear `src/app/(auth)/register/page.tsx` con el mismo patrón: botón "Crear cuenta", enlace a `/login`.
+5. Crear `src/app/dashboard/page.tsx` con un placeholder `<div>Dashboard</div>` para que el middleware tenga a dónde redirigir.
 
 ### Criterio de hecho
 
-`http://localhost:3000/login` muestra un formulario con dos campos y un botón. Ingresar un email inválido y hacer submit muestra el mensaje de error de validación en la UI. No hay errores de TypeScript.
+Abrir una ventana de incógnito y navegar a `http://localhost:3000/dashboard` redirige a `/login`. `http://localhost:3000/login` muestra el formulario con dos campos y un botón. Ingresar un email inválido y hacer submit muestra el error de validación sin redirigir.
 
 ---
 
-## Tarea 07 — Implementar Server Actions de autenticación
+## Tarea 06 — Implementar Server Actions de autenticación
 
 **Depende de:** Tarea 02, Tarea 04  
 **ADR de referencia:** [ADR-0005](docs/adr/0005-server-actions-para-mutaciones.md)
 
-**Objetivo:** crear `src/features/auth/actions.ts` con las tres acciones: `registerUser`, `loginUser` y `logoutUser`, siguiendo el contrato `{ data, error }` definido en el ADR.
+**Objetivo:** crear `src/features/auth/actions.ts` con `registerUser`, `loginUser` y `logoutUser` siguiendo el contrato `{ data?, error? }` del ADR.
 
 ### Pasos
 
@@ -429,7 +412,7 @@ Abrir una ventana de incógnito y navegar a `http://localhost:3000/dashboard` re
      const supabase = await createClient()
      const { error } = await supabase.auth.signUp({ email, password })
      if (error) {
-       if (error.code === 'user_already_exists') return { error: 'Este email ya está registrado.' }
+       if (error.code === 'user_already_registered') return { error: 'Este email ya está registrado.' }
        return { error: 'No se pudo crear la cuenta. Intenta de nuevo.' }
      }
      revalidatePath('/', 'layout')
@@ -454,38 +437,38 @@ Abrir una ventana de incógnito y navegar a `http://localhost:3000/dashboard` re
 
 ### Criterio de hecho
 
-Llamar `registerUser('test@example.com', 'password123')` desde un Server Component de prueba crea el usuario en Supabase Auth (visible en el dashboard de Supabase, sección Authentication → Users). `loginUser` con credenciales incorrectas retorna `{ error: 'Credenciales incorrectas.' }` sin redirigir.
+Completar el formulario de registro en `/register` con un email nuevo crea el usuario en Supabase Dashboard → Authentication → Users (verificación visual). Completar el formulario de login con credenciales incorrectas muestra "Credenciales incorrectas." sin redirigir (se verifica en Tarea 07 una vez conectados los formularios).
 
 ---
 
-## Tarea 08 — Conectar formularios de auth a Server Actions
+## Tarea 07 — Conectar formularios de auth a Server Actions
 
-**Depende de:** Tarea 06, Tarea 07  
+**Depende de:** Tarea 05, Tarea 06  
 **ADR de referencia:** [ADR-0001](docs/adr/0001-nextjs-app-router.md), [ADR-0005](docs/adr/0005-server-actions-para-mutaciones.md)  
 **Prueba manual:** [Prueba 1](docs/pruebas-manuales.md) (registro de nuevo usuario), [Prueba 2](docs/pruebas-manuales.md) (redirección tras login)
 
-**Objetivo:** conectar los formularios de login y register a sus respectivas Server Actions usando `useTransition` para gestionar el estado de carga. Mostrar errores de la acción en la UI.
+**Objetivo:** conectar los formularios de login y register a sus Server Actions con `useTransition`, mostrar errores de la acción en la UI, y crear el layout del dashboard con `NavBar` y logout.
 
 ### Pasos
 
-1. En `src/app/(auth)/register/page.tsx`, importar `registerUser` y llamarla en `onSubmit` con `startTransition`. Mostrar cualquier `error` retornado como mensaje de error visible bajo el formulario.
+1. En `src/app/(auth)/register/page.tsx`, importar `registerUser` y llamarla en `onSubmit` dentro de `startTransition`. Mostrar el `error` retornado bajo el formulario. Deshabilitar el botón mientras `isPending`.
 2. En `src/app/(auth)/login/page.tsx`, mismo patrón con `loginUser`.
-3. Deshabilitar el botón de submit mientras `isPending` sea `true`.
-4. Crear el layout del dashboard en `src/app/dashboard/layout.tsx` con `NavBar` (componente a crear en `src/components/NavBar.tsx`) que muestre el email del usuario y un botón que llame a `logoutUser`.
-5. Para obtener el email del usuario en el NavBar (Server Component), llamar `supabase.auth.getUser()` desde el layout del dashboard.
+3. Crear `src/components/LogoutButton.tsx` como `"use client"` — un botón que llama a `logoutUser` con `useTransition`.
+4. Crear `src/components/NavBar.tsx` como Server Component: muestra el nombre de la app y recibe `userEmail: string` como prop. Renderiza `LogoutButton` como hijo (composición Server → Client).
+5. Crear `src/app/dashboard/layout.tsx`: llama `supabase.auth.getUser()`, obtiene el email y renderiza `NavBar` con ese email. Los hijos van en `<main className="max-w-2xl mx-auto px-8 py-6">`.
 
 ### Criterio de hecho
 
-Completar el flujo completo: registrar un usuario nuevo con `prueba.habittracker@example.com` + contraseña, confirmar que redirige al dashboard, hacer clic en "Cerrar sesión" y confirmar que redirige a `/login`. Prueba 1 del plan de pruebas pasa íntegramente.
+Prueba 1 pasa íntegramente: registrar `prueba.habittracker@example.com`, confirmar redirección al dashboard, el email aparece en la NavBar, hacer clic en "Cerrar sesión" redirige a `/login`.
 
 ---
 
-## Tarea 09 — Implementar Server Actions de hábitos y categorías
+## Tarea 08 — Implementar Server Actions de hábitos y categorías
 
 **Depende de:** Tarea 04  
 **ADR de referencia:** [ADR-0003](docs/adr/0003-modelo-de-datos.md), [ADR-0005](docs/adr/0005-server-actions-para-mutaciones.md)
 
-**Objetivo:** crear `src/features/habits/actions.ts` con `createHabit` y `archiveHabit`, y `src/features/categories/actions.ts` con `createCategory`. Incluir validación de sesión y reglas de negocio (días requeridos para hábitos semanales).
+**Objetivo:** crear `src/features/habits/actions.ts` con `createHabit` y `archiveHabit`, y `src/features/categories/actions.ts` con `createCategory`. Todas verifican sesión y aplican las reglas de negocio.
 
 ### Pasos
 
@@ -554,76 +537,113 @@ Completar el flujo completo: registrar un usuario nuevo con `prueba.habittracker
      return { data: { success: true } }
    }
    ```
-2. Crear `src/features/categories/actions.ts` con `createCategory` que inserta una categoría no predefinida con `user_id` del usuario autenticado y llama `revalidatePath('/dashboard')`.
+2. Crear `src/features/categories/actions.ts` con `createCategory`:
+   ```ts
+   'use server'
+
+   import { revalidatePath } from 'next/cache'
+   import { createClient } from '@/lib/supabase/server'
+
+   export async function createCategory(name: string) {
+     const supabase = await createClient()
+     const { data: { user } } = await supabase.auth.getUser()
+     if (!user) return { error: 'No autenticado.' }
+
+     const { data, error } = await supabase
+       .from('categories')
+       .insert({ user_id: user.id, name, is_predefined: false })
+       .select()
+       .single()
+
+     if (error) return { error: 'No se pudo crear la categoría.' }
+     revalidatePath('/dashboard')
+     return { data }
+   }
+   ```
 
 ### Criterio de hecho
 
-Invocar `createHabit({ name: 'Test', frequency: 'weekly', daysOfWeek: [] })` retorna `{ error: 'Debes seleccionar al menos un día...' }`. Invocar `createHabit({ name: 'Test', frequency: 'daily' })` con usuario autenticado inserta una fila en la tabla `habits` de Supabase (verificable en el Table Editor).
+Desde el formulario de la Tarea 09 (una vez implementado), crear un hábito diario inserta una fila en `habits` visible en el Table Editor de Supabase. Intentar crear un hábito semanal sin días seleccionados retorna el error de validación y no inserta ninguna fila.
 
 ---
 
-## Tarea 10 — Crear HabitForm y página /habits/new
+## Tarea 09 — Crear HabitForm y página /habits/new
 
-**Depende de:** Tarea 06, Tarea 09  
+**Depende de:** Tarea 07, Tarea 08  
 **ADR de referencia:** [ADR-0001](docs/adr/0001-nextjs-app-router.md)  
-**Prueba manual:** [Prueba 3](docs/pruebas-manuales.md) (crear hábito), [Prueba 4](docs/pruebas-manuales.md) (validación de días en hábito semanal)
+**Prueba manual:** [Prueba 4](docs/pruebas-manuales.md) (validación de días en hábito semanal)
 
-**Objetivo:** implementar el componente `HabitForm` (Client Component) y la página `/habits/new` que lo usa. El formulario debe gestionar el condicional de días de semana cuando la frecuencia es "semanal" y llamar a `createHabit` al enviarse.
+**Objetivo:** implementar `HabitForm` (Client Component) y la página `/dashboard/habits/new`. El formulario maneja el condicional de días de semana y conecta con `createHabit`.
 
 ### Pasos
 
-1. Crear `src/features/habits/components/HabitForm.tsx` como `"use client"`. Campos requeridos:
-   - `name` (Input + Label)
+1. Crear `src/components/DayPicker.tsx` como `"use client"`: recibe `value: number[]` y `onChange: (days: number[]) => void`. Renderiza 7 botones toggle con las letras D L M X J V S (mapeadas a valores 0–6 según la convención del plan). Al hacer clic en un botón, agrega o quita su valor del array.
+2. Crear `src/features/habits/components/HabitForm.tsx` como `"use client"` con `react-hook-form`. Campos:
+   - `name` (Input + Label, requerido)
    - `description` (Input, opcional)
-   - `frequency` (Select con opciones "Diaria" / "Semanal")
-   - `daysOfWeek` — aparece solo si frecuencia es "Semanal": 7 botones toggle (L M X J V S D) usando el componente `DayPicker` a crear en `src/components/DayPicker.tsx`
-   - `categoryId` (Select cargado con las categorías disponibles, pasadas como prop)
-   - Botón "Guardar" (primary) y botón "Cancelar" (ghost) que navega a `/dashboard`
-2. El formulario usa `react-hook-form`. La validación de días de semana se hace en `resolver` o en `onSubmit` antes de llamar la acción. El error de validación aparece vía `FormMessage`.
+   - `frequency` (Select: "Diaria" / "Semanal")
+   - `daysOfWeek` — `DayPicker`, solo visible si `frequency === 'weekly'`; validación: al menos un día seleccionado
+   - `categoryId` (Select con las categorías pasadas como prop `categories: Category[]`)
+   - Botón "Guardar" (primary), botón "Cancelar" (ghost) que navega a `/dashboard`
 3. Crear `src/app/dashboard/habits/new/page.tsx` como Server Component:
-   - Lee las categorías disponibles (predefinidas + propias del usuario) desde Supabase.
-   - Renderiza `HabitForm` pasando las categorías como prop.
-4. Al enviar, llama `createHabit` con `useTransition`. Si retorna error, muestra el mensaje en la UI. Si retorna `data`, el `revalidatePath` del Server Action actualiza el dashboard automáticamente y la navegación programática redirige a `/dashboard`.
+   - Lee categorías (predefinidas + propias del usuario) con una query que filtra `is_predefined = true OR user_id = auth.uid()`.
+   - Renderiza `HabitForm` pasando las categorías.
+4. Al enviar, `HabitForm` llama `createHabit` con `useTransition`. Si retorna `error`, muestra el mensaje en la UI. Si retorna `data`, navega programáticamente a `/dashboard` con `useRouter`.
 
 ### Criterio de hecho
 
-Navegar a `/dashboard/habits/new`, completar todos los campos con frecuencia "Semanal" sin seleccionar ningún día y hacer clic en "Guardar" muestra el mensaje de validación sin cerrar el formulario (Prueba 4). Completar los campos correctamente y guardar crea el hábito y aparece en el dashboard (Prueba 3).
+Navegar a `/dashboard/habits/new`, seleccionar frecuencia "Semanal", dejar todos los días sin seleccionar y hacer clic en "Guardar" muestra el mensaje de validación sin cerrar el formulario ni insertar nada (Prueba 4). Completar los campos correctamente y guardar inserta la fila en Supabase y redirige a `/dashboard`.
 
 ---
 
-## Tarea 11 — Listar hábitos activos en el dashboard (HabitCard)
+## Tarea 10 — Listar hábitos activos en el dashboard (HabitCard)
 
-**Depende de:** Tarea 10  
-**ADR de referencia:** [ADR-0001](docs/adr/0001-nextjs-app-router.md), [ADR-0003](docs/adr/0003-modelo-de-datos.md)  
-**Prueba manual:** [Prueba 3](docs/pruebas-manuales.md) (hábito aparece en lista)
+**Depende de:** Tarea 09  
+**ADR de referencia:** [ADR-0001](docs/adr/0001-nextjs-app-router.md), [ADR-0003](docs/adr/0003-modelo-de-datos.md)
 
-**Objetivo:** reemplazar el placeholder del dashboard con un Server Component que lea los hábitos activos del usuario y los renderice con `HabitCard`. Hábitos semanales solo aparecen si el día actual está entre sus `habit_days`.
+**Objetivo:** reemplazar el placeholder del dashboard con un Server Component que lee hábitos activos con una query única (LEFT JOIN) y los renderiza con `HabitCard`.
 
 ### Pasos
 
-1. Crear `src/features/habits/components/HabitCard.tsx` como Client Component con las props: `habit: Habit`, `isCheckedToday: boolean`, `streak: number`. Por ahora renderiza nombre, categoría y un `CheckInButton` placeholder (botón simple, se conecta en Tarea 13). El `StreakBadge` puede ser un placeholder textual hasta la Tarea 14.
-2. Actualizar `src/app/dashboard/page.tsx` como Server Component:
-   - Obtener `user` desde `supabase.auth.getUser()`.
-   - Query: `habits` donde `archived_at IS NULL` y `user_id = user.id`, con join a `categories` y `habit_days`.
-   - Filtrar en memoria los hábitos semanales: mostrar solo si `day_of_week` del día actual (usando `new Date().getDay()`) está en sus días configurados.
-   - Para cada hábito, verificar si existe un `check_in` con `checked_date = today`.
-   - Si no hay hábitos, renderizar `EmptyState` (componente a crear en `src/components/EmptyState.tsx`) con un CTA a `/dashboard/habits/new`.
-   - Renderizar la lista de `HabitCard`.
-3. Crear `src/components/PageHeader.tsx` con props `title: string` y `action?: React.ReactNode`. Usarlo en el dashboard con título "Mis hábitos" y un botón "Nuevo hábito" que navega a `/dashboard/habits/new`.
+1. Actualizar `src/app/dashboard/page.tsx` como Server Component:
+   - Obtener `user` y `todayStr = new Date().toLocaleDateString('sv')` (fecha local en formato YYYY-MM-DD).
+   - Obtener `todayDow = new Date().getDay()` (0=domingo … 6=sábado, según la convención del plan).
+   - Ejecutar una sola query que traiga hábitos activos con sus días y el check-in de hoy:
+     ```ts
+     const { data: habits } = await supabase
+       .from('habits')
+       .select(`
+         *,
+         categories ( id, name ),
+         habit_days ( day_of_week ),
+         check_ins!left ( id, checked_date )
+       `)
+       .eq('user_id', user.id)
+       .is('archived_at', null)
+       .eq('check_ins.checked_date', todayStr)
+     ```
+   - Filtrar en memoria: excluir hábitos semanales cuyos `habit_days` no incluyan `todayDow`.
+   - Si no hay hábitos, renderizar `EmptyState` con CTA a `/dashboard/habits/new`.
+   - Renderizar lista de `HabitCard`.
+2. Crear `src/features/habits/components/HabitCard.tsx` como Client Component con props:
+   `habit: Habit`, `categoryName: string | null`, `checkInId: string | null`, `streak: number`
+   Por ahora `streak` recibe 0 como placeholder (se conecta en Tarea 13). Renderiza nombre, categoría y un `CheckInButton` placeholder (botón simple, se conecta en Tarea 12).
+3. Crear `src/components/EmptyState.tsx` con mensaje y botón CTA.
+4. Crear `src/components/PageHeader.tsx` con props `title: string` y `action?: React.ReactNode`. Usarlo en el dashboard con título "Mis hábitos" y un botón "Nuevo hábito" que navega a `/dashboard/habits/new`.
 
 ### Criterio de hecho
 
-Después de crear un hábito diario, aparece en el dashboard. Un hábito semanal configurado para lunes no aparece en el dashboard un martes. Con cero hábitos, el dashboard muestra el estado vacío con el botón "Nuevo hábito".
+Después de crear un hábito diario en Tarea 09, recargando `/dashboard` aparece en la lista. Con cero hábitos, el dashboard muestra el estado vacío con el botón "Nuevo hábito". (La verificación de hábitos semanales por día se valida en Tarea 12 una vez que los check-ins están activos.)
 
 ---
 
-## Tarea 12 — Implementar Server Actions de check-in con reglas de negocio
+## Tarea 11 — Implementar Server Actions de check-in con reglas de negocio
 
-**Depende de:** Tarea 04, Tarea 09  
+**Depende de:** Tarea 04, Tarea 08  
 **ADR de referencia:** [ADR-0003](docs/adr/0003-modelo-de-datos.md), [ADR-0005](docs/adr/0005-server-actions-para-mutaciones.md)  
 **Prueba manual:** [Prueba 7](docs/pruebas-manuales.md) (no se puede marcar con fecha antigua)
 
-**Objetivo:** crear `src/features/checkins/actions.ts` con `createCheckIn` y `deleteCheckIn`. Ambas acciones verifican la ventana temporal permitida antes de ejecutar la mutación.
+**Objetivo:** crear `src/features/checkins/actions.ts` con `createCheckIn` y `deleteCheckIn`. La aritmética de fechas usa comparación de strings en hora local para evitar bugs de timezone.
 
 ### Pasos
 
@@ -634,18 +654,25 @@ Después de crear un hábito diario, aparece en el dashboard. Un hábito semanal
    import { revalidatePath } from 'next/cache'
    import { createClient } from '@/lib/supabase/server'
 
+   function getTodayStr() {
+     return new Date().toLocaleDateString('sv') // 'YYYY-MM-DD' en hora local
+   }
+
+   function getYesterdayStr() {
+     const d = new Date()
+     d.setDate(d.getDate() - 1)
+     return d.toLocaleDateString('sv')
+   }
+
    export async function createCheckIn(habitId: string, checkedDate: string) {
      const supabase = await createClient()
      const { data: { user } } = await supabase.auth.getUser()
      if (!user) return { error: 'No autenticado.' }
 
-     const today = new Date()
-     today.setHours(0, 0, 0, 0)
-     const target = new Date(checkedDate)
-     target.setHours(0, 0, 0, 0)
-     const diffDays = Math.round((today.getTime() - target.getTime()) / 86400000)
+     const todayStr     = getTodayStr()
+     const yesterdayStr = getYesterdayStr()
 
-     if (diffDays > 1 || diffDays < 0) {
+     if (checkedDate !== todayStr && checkedDate !== yesterdayStr) {
        return { error: 'Solo puedes registrar check-ins de hoy o de ayer.' }
      }
 
@@ -674,12 +701,10 @@ Después de crear un hábito diario, aparece en el dashboard. Un hábito semanal
 
      if (!checkIn) return { error: 'Check-in no encontrado.' }
 
-     const createdDate = new Date(checkIn.created_at)
-     createdDate.setHours(0, 0, 0, 0)
-     const today = new Date()
-     today.setHours(0, 0, 0, 0)
+     const createdStr = new Date(checkIn.created_at).toLocaleDateString('sv')
+     const todayStr   = getTodayStr()
 
-     if (createdDate.getTime() !== today.getTime()) {
+     if (createdStr !== todayStr) {
        return { error: 'Solo puedes desmarcar un check-in el mismo día en que fue registrado.' }
      }
 
@@ -691,72 +716,69 @@ Después de crear un hábito diario, aparece en el dashboard. Un hábito semanal
 
 ### Criterio de hecho
 
-Llamar `createCheckIn(habitId, '2026-05-01')` (fecha con más de 1 día de antigüedad) retorna `{ error: 'Solo puedes registrar check-ins de hoy o de ayer.' }` sin insertar nada en la base de datos. Llamar con la fecha de hoy inserta la fila correctamente.
+Usando el formulario de la Tarea 12 (una vez implementado): marcar un hábito hoy lo registra en `check_ins` (verificable en Table Editor). Intentar registrar con `checkedDate = '2026-05-01'` retorna el error de ventana temporal sin insertar fila (verificable porque la tabla no cambia).
 
 ---
 
-## Tarea 13 — Conectar CheckInButton al dashboard
+## Tarea 12 — Conectar CheckInButton al dashboard
 
-**Depende de:** Tarea 11, Tarea 12  
+**Depende de:** Tarea 10, Tarea 11  
 **ADR de referencia:** [ADR-0005](docs/adr/0005-server-actions-para-mutaciones.md)  
 **Prueba manual:** [Prueba 5](docs/pruebas-manuales.md) (marcar check-in), [Prueba 6](docs/pruebas-manuales.md) (desmarcar)
 
-**Objetivo:** reemplazar el botón placeholder de `HabitCard` con el componente `CheckInButton` que llama a `createCheckIn` o `deleteCheckIn` según el estado actual, usando `useTransition` para optimismo visual.
+**Objetivo:** reemplazar el botón placeholder de `HabitCard` con `CheckInButton` que llama a `createCheckIn` o `deleteCheckIn` según el estado actual.
 
 ### Pasos
 
 1. Crear `src/components/CheckInButton.tsx` como `"use client"`:
    - Props: `habitId: string`, `checkInId: string | null`, `isCheckedToday: boolean`
-   - Si `isCheckedToday`: muestra botón en estado completado (fondo `green-600`, texto "Completado"). Al hacer clic, llama `deleteCheckIn(checkInId!)`.
-   - Si no `isCheckedToday`: muestra botón en estado pendiente (borde `indigo-600`). Al hacer clic, llama `createCheckIn(habitId, today)` donde `today` es la fecha actual en formato `YYYY-MM-DD`.
-   - Deshabilitar el botón mientras `isPending` es `true` (useTransition).
-2. Actualizar `HabitCard` para recibir `checkInId: string | null` y usar `CheckInButton` en lugar del placeholder.
-3. Actualizar el dashboard para pasar `checkInId` a cada `HabitCard` (ya se tienen los check-ins de hoy desde la Tarea 11).
+   - Si `isCheckedToday`: botón en estado completado (fondo `green-600`, texto "Completado"). Al hacer clic llama `deleteCheckIn(checkInId!)`.
+   - Si no: botón en estado pendiente (borde `indigo-600`). Al hacer clic llama `createCheckIn(habitId, new Date().toLocaleDateString('sv'))`.
+   - Deshabilitar mientras `isPending` (useTransition).
+2. Actualizar `HabitCard` para usar `CheckInButton` en lugar del placeholder.
+3. El dashboard ya tiene `checkInId` desde la query de Tarea 10 — pasarlo a `HabitCard`.
 
 ### Criterio de hecho
 
-Hacer clic en un hábito pendiente lo cambia visualmente a completado sin recargar la página. Hacer clic de nuevo lo desmarca. Prueba 5 y Prueba 6 pasan íntegramente.
+Prueba 5 y Prueba 6 pasan íntegramente: marcar un hábito pendiente lo cambia a completado visualmente sin recargar; desmarcar lo devuelve a pendiente.
 
 ---
 
-## Tarea 14 — Computar racha y mostrar StreakBadge
+## Tarea 13 — Computar racha y mostrar StreakBadge
 
-**Depende de:** Tarea 11, Tarea 04  
+**Depende de:** Tarea 10, Tarea 04  
 **ADR de referencia:** [ADR-0003](docs/adr/0003-modelo-de-datos.md)  
 **Prueba manual:** [Prueba 8](docs/pruebas-manuales.md) (período de gracia de 1 día)
 
-**Objetivo:** implementar la función `computeStreak` que calcula la racha actual desde los check-ins históricos respetando el período de gracia de 1 día, y mostrarla en `StreakBadge` dentro de `HabitCard`.
+**Objetivo:** implementar `computeStreak` con comparación de strings y mostrarla en `StreakBadge`. Los check-ins se cargan con un límite de 365 días para acotar la query.
 
 ### Pasos
 
-1. Crear `src/features/habits/streak.ts` con la función `computeStreak`:
+1. Crear `src/features/habits/streak.ts`:
    ```ts
+   function toLocalDateStr(date: Date): string {
+     return date.toLocaleDateString('sv') // 'YYYY-MM-DD' en hora local
+   }
+
    export function computeStreak(checkedDates: string[]): number {
      if (checkedDates.length === 0) return 0
 
-     const sorted = [...checkedDates]
-       .map(d => new Date(d))
-       .sort((a, b) => b.getTime() - a.getTime())
+     const sorted = [...checkedDates].sort().reverse() // descendente: más reciente primero
 
-     const today = new Date()
-     today.setHours(0, 0, 0, 0)
+     const todayStr     = toLocalDateStr(new Date())
+     const yesterdayStr = toLocalDateStr(new Date(new Date().setDate(new Date().getDate() - 1)))
 
-     const mostRecent = new Date(sorted[0])
-     mostRecent.setHours(0, 0, 0, 0)
-
-     const daysSinceLast = Math.round((today.getTime() - mostRecent.getTime()) / 86400000)
-     // Período de gracia: si falló ayer (daysSinceLast === 1), la racha no se rompió aún
-     // Si falló hace 2+ días, la racha es 0
-     if (daysSinceLast > 1) return 0
+     const mostRecent = sorted[0]
+     // Período de gracia: si el check más reciente no es hoy ni ayer, la racha se rompió
+     if (mostRecent !== todayStr && mostRecent !== yesterdayStr) return 0
 
      let streak = 1
      for (let i = 1; i < sorted.length; i++) {
-       const prev = new Date(sorted[i - 1])
-       const curr = new Date(sorted[i])
-       prev.setHours(0, 0, 0, 0)
-       curr.setHours(0, 0, 0, 0)
-       const diff = Math.round((prev.getTime() - curr.getTime()) / 86400000)
-       if (diff === 1) {
+       // Calcular la fecha esperada: un día antes de sorted[i-1]
+       const prev = new Date(sorted[i - 1] + 'T00:00:00') // local midnight
+       prev.setDate(prev.getDate() - 1)
+       const expectedStr = toLocalDateStr(prev)
+       if (sorted[i] === expectedStr) {
          streak++
        } else {
          break
@@ -765,53 +787,200 @@ Hacer clic en un hábito pendiente lo cambia visualmente a completado sin recarg
      return streak
    }
    ```
-2. Crear `src/components/StreakBadge.tsx` que recibe `streak: number` y renderiza el contador con ícono de fuego usando la clase `text-green-600` cuando `streak > 0`.
-3. Actualizar el dashboard para cargar los `checked_date` de todos los check-ins de cada hábito (no solo el de hoy), calcular la racha con `computeStreak` y pasarla a `HabitCard`.
+2. Crear `src/components/StreakBadge.tsx`: recibe `streak: number`, renderiza `🔥 {streak}` con clase `text-green-600` cuando `streak > 0`, y `text-gray-400` cuando es 0. El ícono puede ser el carácter emoji o un SVG inline — no instalar librería adicional para un solo icono.
+3. Actualizar `src/app/dashboard/page.tsx` para cargar los `checked_date` de los últimos 365 días de cada hábito añadiendo al select:
+   ```ts
+   .gte('check_ins.checked_date', (() => {
+     const d = new Date(); d.setFullYear(d.getFullYear() - 1);
+     return d.toLocaleDateString('sv')
+   })())
+   ```
+   Calcular `computeStreak` para cada hábito y pasarlo como prop `streak` a `HabitCard`.
+4. Actualizar `HabitCard` para reemplazar el placeholder textual de racha con `StreakBadge`.
 
 ### Criterio de hecho
 
-Un hábito con check-ins en los últimos 3 días muestra racha "3" en el `StreakBadge`. Un hábito con check-ins hasta avant-ayer (sin ayer ni hoy) muestra racha "0". Un hábito con check-ins hasta ayer (sin hoy) muestra racha igual al número de días consecutivos previos (período de gracia activo). Prueba 8 — Parte A pasa.
+Un hábito con check-ins en los últimos 3 días consecutivos muestra racha "3". Un hábito sin check-ins en los últimos 2 días muestra racha "0". Prueba 8 — Parte A pasa (requiere insertar check-ins de prueba directamente en el Table Editor de Supabase para configurar el estado previo).
 
 ---
 
-## Tarea 15 — Archivar hábito: página /habits/[id]/edit y ConfirmDialog
+## Tarea 14 — Archivar hábito: ConfirmDialog y flujo desde HabitCard
 
-**Depende de:** Tarea 09, Tarea 11  
+**Depende de:** Tarea 08, Tarea 10  
 **ADR de referencia:** [ADR-0003](docs/adr/0003-modelo-de-datos.md), [ADR-0005](docs/adr/0005-server-actions-para-mutaciones.md)  
 **Prueba manual:** [Prueba 9](docs/pruebas-manuales.md) (hábito archivado desaparece del dashboard)
 
-**Objetivo:** crear la página de edición de hábito y el flujo de archivado con confirmación. Al archivar, el hábito desaparece del dashboard y no acepta nuevos check-ins, pero sus datos históricos se preservan en la base de datos.
+**Objetivo:** crear el componente `ConfirmDialog` y el flujo completo de archivado iniciado desde `HabitCard`. El archivar usa `archiveHabit` ya existente en Tarea 08.
 
 ### Pasos
 
-1. Crear `src/app/dashboard/habits/[id]/edit/page.tsx` como Server Component que:
-   - Carga el hábito por ID desde Supabase (verificando que pertenece al usuario autenticado).
-   - Si no existe o no pertenece al usuario, llama `notFound()`.
-   - Renderiza `HabitForm` en modo edición con los valores precargados y un botón destructivo "Archivar hábito".
-2. Crear `src/components/ConfirmDialog.tsx` como Client Component usando `Dialog` de shadcn/ui. Props: `trigger: React.ReactNode`, `title: string`, `description: string`, `onConfirm: () => void`. Al confirmar, llama `onConfirm` y cierra el diálogo.
-3. El botón "Archivar hábito" en la página de edición abre el `ConfirmDialog`. Al confirmar, llama `archiveHabit(id)` con `useTransition` y navega a `/dashboard`.
-4. Agregar en cada `HabitCard` del dashboard un enlace o botón secundario que navega a `/dashboard/habits/[id]/edit`.
-5. Actualizar `createHabit` en `actions.ts` para también manejar la edición: agregar `updateHabit(id, input)` que actualiza los campos editables y preserva `created_at` y el historial de check-ins intacto.
+1. Crear `src/components/ConfirmDialog.tsx` como `"use client"` usando `Dialog` de shadcn/ui:
+   - Props: `trigger: React.ReactNode`, `title: string`, `description: string`, `onConfirm: () => void`, `isPending?: boolean`
+   - Al confirmar llama `onConfirm` y cierra el diálogo.
+   - Botón de confirmación deshabilitado mientras `isPending`.
+2. Agregar en `HabitCard` un botón secundario (ghost, pequeño) "Archivar". Al hacer clic abre el `ConfirmDialog`. Al confirmar, llama `archiveHabit(habit.id)` con `useTransition`. El `revalidatePath` del Server Action refresca el dashboard.
 
 ### Criterio de hecho
 
-Archivar el hábito "Leer 30 minutos" desde la página de edición y confirmar hace que desaparezca de la lista del dashboard inmediatamente. En el Table Editor de Supabase, la fila en `habits` tiene `archived_at` no nulo. Los registros en `check_ins` asociados al hábito siguen existiendo. Prueba 9 pasa íntegramente.
+Prueba 9 pasa íntegramente: archivar "Leer 30 minutos" y confirmar hace que desaparezca del dashboard. En el Table Editor, la fila en `habits` tiene `archived_at` no nulo. Los registros en `check_ins` asociados siguen existiendo.
+
+---
+
+## Tarea 15 — Editar hábito: updateHabit y página /habits/[id]/edit
+
+**Depende de:** Tarea 08, Tarea 09, Tarea 10  
+**ADR de referencia:** [ADR-0003](docs/adr/0003-modelo-de-datos.md), [ADR-0005](docs/adr/0005-server-actions-para-mutaciones.md)
+
+**Objetivo:** agregar `updateHabit` al Server Action de hábitos y crear la página de edición que reutiliza `HabitForm` con valores precargados, incluyendo la actualización de `habit_days` cuando cambia la frecuencia.
+
+### Pasos
+
+1. Agregar `updateHabit` en `src/features/habits/actions.ts`:
+   ```ts
+   export async function updateHabit(habitId: string, input: CreateHabitInput) {
+     const supabase = await createClient()
+     const { data: { user } } = await supabase.auth.getUser()
+     if (!user) return { error: 'No autenticado.' }
+
+     if (input.frequency === 'weekly' && (!input.daysOfWeek || input.daysOfWeek.length === 0)) {
+       return { error: 'Debes seleccionar al menos un día para un hábito semanal.' }
+     }
+
+     const { error: updateError } = await supabase
+       .from('habits')
+       .update({
+         name:        input.name,
+         description: input.description ?? null,
+         frequency:   input.frequency,
+         category_id: input.categoryId ?? null,
+       })
+       .eq('id', habitId)
+       .eq('user_id', user.id)
+
+     if (updateError) return { error: 'No se pudo actualizar el hábito.' }
+
+     // Reemplazar habit_days: borrar los existentes e insertar los nuevos
+     await supabase.from('habit_days').delete().eq('habit_id', habitId)
+     if (input.frequency === 'weekly' && input.daysOfWeek && input.daysOfWeek.length > 0) {
+       await supabase.from('habit_days').insert(
+         input.daysOfWeek.map(day => ({ habit_id: habitId, day_of_week: day }))
+       )
+     }
+
+     revalidatePath('/dashboard')
+     revalidatePath(`/dashboard/habits/${habitId}/edit`)
+     return { data: { success: true } }
+   }
+   ```
+2. Actualizar `HabitForm` para aceptar props opcionales `defaultValues?: CreateHabitInput & { id?: string }` y `mode: 'create' | 'edit'`. En modo edición, los campos se inicializan con `defaultValues`. El `DayPicker` recibe los días precargados desde `defaultValues.daysOfWeek`.
+3. Crear `src/app/dashboard/habits/[id]/edit/page.tsx` como Server Component:
+   - Carga el hábito y sus `habit_days` por ID verificando `user_id = auth.uid()`. Si no existe, llama `notFound()`.
+   - Lee categorías disponibles (misma query que `/habits/new`).
+   - Renderiza `HabitForm` en modo edición con `defaultValues` precargados.
+4. En `HabitForm` modo edición: al enviar, llama `updateHabit(id, input)` en lugar de `createHabit`.
+5. Agregar en `HabitCard` un enlace secundario (icono de lápiz o texto "Editar") que navega a `/dashboard/habits/[id]/edit`.
+
+### Criterio de hecho
+
+Navegar a `/dashboard/habits/[id]/edit` muestra el formulario con los valores del hábito precargados (nombre, descripción, frecuencia, días si es semanal, categoría). Cambiar la frecuencia de "Diaria" a "Semanal", seleccionar días y guardar actualiza la fila en `habits` y crea filas en `habit_days` (verificable en Table Editor). Los check-ins previos no se modifican.
+
+---
+
+## Tarea 16 — CategoryFilter y filtrado por categoría en el dashboard
+
+**Depende de:** Tarea 10, Tarea 08  
+**ADR de referencia:** [ADR-0003](docs/adr/0003-modelo-de-datos.md)  
+**Prueba manual:** [Prueba 10](docs/pruebas-manuales.md) (filtrado por categoría)
+
+**Objetivo:** implementar `CategoryFilter` con `CategoryChip` y filtrar los hábitos del dashboard por la categoría seleccionada. El filtro es URL-driven (query param `?category=<id>`) para que funcione como Server Component sin estado en cliente.
+
+### Pasos
+
+1. Crear `src/components/CategoryChip.tsx` como `"use client"`: recibe `label: string`, `href: string` e `isActive: boolean`. Renderiza un chip con fondo `indigo-600` cuando activo y borde `gray-200` cuando inactivo. Al hacer clic navega a `href` con `router.push`.
+2. Crear `src/components/CategoryFilter.tsx` como `"use client"`: recibe `categories: Category[]` y `activeCategoryId: string | null`. Renderiza un `CategoryChip` por categoría + uno "Todas" que limpia el filtro. Scroll horizontal en mobile.
+3. Actualizar `src/app/dashboard/page.tsx` para:
+   - Leer `searchParams.category` como el `activeCategoryId`.
+   - Añadir `.eq('category_id', activeCategoryId)` a la query de hábitos si `activeCategoryId` no es null.
+   - Cargar las categorías que el usuario tiene asignadas en al menos un hábito activo (query sobre `habits` agrupada) para no mostrar chips vacíos.
+   - Renderizar `CategoryFilter` arriba de la lista de `HabitCard`.
+
+### Criterio de hecho
+
+Prueba 10 pasa íntegramente: con hábitos de categorías "Deporte" y "Bienestar" visibles, hacer clic en el chip "Deporte" actualiza la URL a `?category=<id>` y el dashboard muestra únicamente los hábitos de esa categoría. Hacer clic en "Todas" limpia el filtro y muestra todos.
+
+---
+
+## Tarea 17 — Progreso semanal: computeWeeklyProgress y WeeklyProgress
+
+**Depende de:** Tarea 10, Tarea 11  
+**ADR de referencia:** [ADR-0003](docs/adr/0003-modelo-de-datos.md)
+
+**Objetivo:** mostrar en `HabitCard` para hábitos semanales el porcentaje de días programados completados en la semana actual (lunes a domingo), en lugar del `StreakBadge` que aplica solo a hábitos diarios.
+
+### Pasos
+
+1. Crear `src/features/habits/weekly-progress.ts`:
+   ```ts
+   export function computeWeeklyProgress(
+     checkedDates: string[],
+     daysOfWeek: number[]
+   ): number {
+     if (daysOfWeek.length === 0) return 0
+
+     // Calcular lunes y domingo de la semana actual en hora local
+     const today = new Date()
+     const dow = today.getDay() // 0=domingo, 1=lunes...
+     const monday = new Date(today)
+     monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1))
+     const sunday = new Date(monday)
+     sunday.setDate(monday.getDate() + 6)
+
+     const mondayStr = monday.toLocaleDateString('sv')
+     const sundayStr = sunday.toLocaleDateString('sv')
+
+     // Días programados que caen dentro de la semana actual
+     const scheduledDates: string[] = []
+     for (let i = 0; i <= 6; i++) {
+       const d = new Date(monday)
+       d.setDate(monday.getDate() + i)
+       if (daysOfWeek.includes(d.getDay())) {
+         scheduledDates.push(d.toLocaleDateString('sv'))
+       }
+     }
+
+     const completed = checkedDates.filter(
+       d => d >= mondayStr && d <= sundayStr && scheduledDates.includes(d)
+     ).length
+
+     return scheduledDates.length === 0
+       ? 0
+       : Math.round((completed / scheduledDates.length) * 100)
+   }
+   ```
+2. Crear `src/components/WeeklyProgress.tsx`: recibe `percentage: number`. Renderiza una barra de progreso (`div` con `bg-indigo-600` al ancho `${percentage}%` sobre fondo `gray-200`) y el texto `${percentage}%` a la derecha. Ancho total `100%`.
+3. Actualizar el dashboard para cargar también los `checked_date` de la semana actual para hábitos semanales (la query ya trae check-ins — filtrar en memoria los de la semana).
+4. Actualizar `HabitCard`: si `habit.frequency === 'weekly'`, renderizar `WeeklyProgress` en lugar de `StreakBadge`.
+
+### Criterio de hecho
+
+Un hábito semanal configurado para L/M/X (3 días) con 2 check-ins registrados esta semana muestra "67%" en la barra de progreso. Un hábito con todos sus días completados esta semana muestra "100%". Un hábito semanal sin ningún check-in esta semana muestra "0%".
 
 ---
 
 ## Resumen de orden y dependencias
 
 ```
-T01 ──→ T02 ──→ T03 ──→ T04 ──→ T07 ──→ T08
-         │                └──→ T09 ──→ T10 ──→ T11 ──→ T13
-         │                      └──→ T12 ──┘           │
-         └──→ T05                                       │
-         └──→ T06 ──→ T08                               │
-                       └──────────────────────────────→ T13
-                                                T11 ──→ T14
-                                           T09, T11 ──→ T15
+T01 ──→ T02 ──→ T03 ──→ T04 ──→ T06 ──→ T07
+         │                └──→ T08 ──→ T09 ──→ T10 ──→ T12
+         │                      └──→ T11 ──┘     │
+         └──→ T05 ──→ T07                         ├──→ T13
+                                             T10  ├──→ T14
+                                        T08,T09  └──→ T15
+                                        T10,T08 ──→ T16
+                                        T10,T11 ──→ T17
 ```
 
-**Ruta crítica:** T01 → T02 → T03 → T04 → T09 → T10 → T11 → T13
+**Ruta crítica:** T01 → T02 → T03 → T04 → T08 → T09 → T10 → T12
 
-Las tareas T05, T06, T07, T08 pueden avanzar en paralelo con T03 y T04 una vez T02 esté completa.
+Las tareas T05, T06 pueden avanzar en paralelo con T03 y T04 una vez T02 esté completa.  
+T13, T14, T16 y T17 son independientes entre sí y pueden ejecutarse en paralelo después de T10.
