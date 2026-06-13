@@ -66,12 +66,12 @@ App web de seguimiento de hábitos personales que permite a individuos crear, or
 16. Dado un hábito diario, cuando el usuario consulta su progreso, entonces ve el número de días consecutivos completados que conforman su racha actual.
 17. Dado un hábito diario con racha activa, cuando el usuario falla exactamente 1 día, entonces la racha se mantiene (período de gracia). Cuando falla un segundo día consecutivo, entonces la racha se rompe y el contador vuelve a cero.
 18. Dado un hábito semanal, cuando el usuario consulta su progreso, entonces ve el porcentaje de días programados que completó dentro del período visualizado.
-19. [DECIDIR: ¿Qué período de tiempo muestra la vista de progreso para hábitos semanales — semana actual, mes actual, o un rango seleccionable por el usuario?]
+19. Dado un hábito semanal, cuando el usuario consulta su progreso, entonces el período visualizado es la semana calendario actual (lunes a domingo). *(Decidido en ADR-0003)*
 
 ### Categorías
 
 20. Dado un usuario creando o editando un hábito, cuando llega al campo de categoría, entonces puede elegir una del catálogo predefinido o escribir el nombre de una categoría nueva para crearla.
-21. [DECIDIR: ¿Un hábito puede pertenecer a más de una categoría, o solo a una? La respuesta cambia si categorías funcionan como etiquetas (múltiples) o como carpetas (una sola).]
+21. Un hábito pertenece a cero o una categoría (FK directa). Las categorías funcionan como carpetas, no como etiquetas. *(Decidido en ADR-0003)*
 22. Dado un usuario en su dashboard con hábitos de distintas categorías, cuando selecciona filtrar por una categoría específica, entonces la lista muestra únicamente los hábitos activos que pertenecen a esa categoría.
 23. Dado un usuario que creó una categoría personalizada, cuando asigna esa categoría a un hábito y guarda, entonces el hábito aparece listado bajo esa categoría al filtrar.
 
