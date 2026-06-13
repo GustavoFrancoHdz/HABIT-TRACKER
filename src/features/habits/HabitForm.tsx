@@ -139,6 +139,21 @@ export default function HabitForm({ action, categories, defaultValues }: Props) 
         </select>
       </div>
 
+      {/* Nueva categoría personalizada */}
+      <div className="space-y-1">
+        <label htmlFor="new_category_name" className="block text-sm font-medium text-gray-700">
+          O crea una categoría nueva
+        </label>
+        <input
+          id="new_category_name"
+          name="new_category_name"
+          type="text"
+          placeholder="Ej: Trabajo, Salud mental…"
+          className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        />
+        <p className="text-xs text-gray-400">Si rellenas este campo se ignora la selección de arriba.</p>
+      </div>
+
       {/* Botones */}
       <div className="flex gap-3 pt-2">
         <button
