@@ -27,12 +27,14 @@ Estas decisiones son incompatibles entre sí: elegir "múltiples categorías" im
 
 **Período de progreso semanal:** semana calendario actual (lunes a domingo).
 
+**Categorías predefinidas globales:** `categories.user_id` es nullable. Las filas con `user_id = NULL` e `is_predefined = true` son categorías del sistema visibles para todos los usuarios. Las filas con `user_id` poblado son categorías personalizadas de ese usuario. El seed de categorías predefinidas se inserta una sola vez en la base de datos, no por usuario.
+
 ### Esquema resultante
 
 ```sql
 create table categories (
   id            uuid primary key default gen_random_uuid(),
-  user_id       uuid not null references auth.users(id) on delete cascade,
+  user_id       uuid references auth.users(id) on delete cascade, -- NULL para categorías predefinidas globales
   name          text not null,
   is_predefined boolean not null default false,
   created_at    timestamptz not null default now()

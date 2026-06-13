@@ -12,6 +12,7 @@ Las decisiones documentadas aquí están cerradas. Las que no aparecen están ab
 - Deploy: Vercel
 - Lenguaje: TypeScript 5 con `strict: true`
 - Estilos: Tailwind CSS
+- Componentes primitivos: shadcn/ui (autorizado)
 
 ---
 
